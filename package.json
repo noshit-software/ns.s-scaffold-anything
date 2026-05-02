@@ -1,0 +1,9 @@
+{
+  "name": "ns.s-scaffold-anything",
+  "version": "1.0.0",
+  "description": "À la carte project scaffolder for Claude Code",
+  "type": "module",
+  "scripts": {
+    "validate": "node validate-env.js"
+  }
+}
