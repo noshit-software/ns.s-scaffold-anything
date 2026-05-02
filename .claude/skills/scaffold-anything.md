@@ -27,6 +27,11 @@ Ask each question in sequence. Do not proceed until each is answered.
 **Description**
 - One-line repo description
 
+**Subdomain**
+- Suggest `{repo-name}.{SCAFFOLD_CF_DOMAIN_{org}}` as the default
+- User can accept or enter a different subdomain
+- Type `none` to skip DNS creation
+
 **Layers** — present each as a numbered menu, user picks one per category:
 
 ```
@@ -207,7 +212,8 @@ Generate `ecosystem.config.js` at repo root:
 module.exports = {
   apps: [{
     name: '{repo-name}',
-    script: 'dist/index.js',  // or 'app/main.py' for FastAPI
+    script: '{SCAFFOLD_SERVER_APPS_DIR}/{repo-name}/dist/index.js',  // or app/main.py for FastAPI
+    cwd: '{SCAFFOLD_SERVER_APPS_DIR}/{repo-name}',
     env: { NODE_ENV: 'production', PORT: {assigned-port} }
   }]
 }
@@ -239,17 +245,21 @@ Generate `Dockerfile` and `docker-compose.yml` appropriate for the backend layer
 
 ## 6. Create Cloudflare DNS record
 
+Skip this step if the user typed `none` for subdomain.
+
+Look up `SCAFFOLD_CF_ZONE_ID_{org}` and `SCAFFOLD_CF_DOMAIN_{org}` (hyphens in org → underscores).
+
 Make a POST to the Cloudflare API to create an A record:
-- Subdomain: `{repo-name}.{SCAFFOLD_CF_DOMAIN}`
+- Subdomain: `{chosen-subdomain}` (just the label, not the full domain)
 - Points to: `{SCAFFOLD_SERVER_HOST}`
 - Proxied: true
 
 ```
-POST https://api.cloudflare.com/client/v4/zones/{SCAFFOLD_CF_ZONE_ID}/dns_records
+POST https://api.cloudflare.com/client/v4/zones/{SCAFFOLD_CF_ZONE_ID_{org}}/dns_records
 Authorization: Bearer {SCAFFOLD_CF_API_TOKEN}
 {
   "type": "A",
-  "name": "{repo-name}",
+  "name": "{chosen-subdomain}",
   "content": "{SCAFFOLD_SERVER_HOST}",
   "proxied": true
 }
