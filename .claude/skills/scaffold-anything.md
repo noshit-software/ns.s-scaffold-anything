@@ -6,9 +6,9 @@ Scaffold a new project from scratch with à la carte layers. Reads personal conf
 
 ## 1. Load config
 
-Read `~/.scaffold-anything/.env` (Linux/Mac) or `C:/Users/{username}/.scaffold-anything/.env` (Windows). Parse as KEY=VALUE pairs, ignoring blank lines and comments.
+Read `D:\workspace-ns.s\ns.s-scaffold-anything\.env` (this project's root — not the home dir). Parse as KEY=VALUE pairs, ignoring blank lines and comments.
 
-If the file doesn't exist: tell the user to create `~/.scaffold-anything/.env` using the `.env.example` from the repo at `noshit-software/ns.s-scaffold-anything`. Stop.
+If the file doesn't exist: tell the user to create it using `.env.example` from the same repo. Stop.
 
 ---
 
@@ -18,7 +18,7 @@ Ask each question in sequence. Do not proceed until each is answered.
 
 **Repo name**
 - Must be lowercase, hyphens only, no spaces
-- Remind the user of any org naming convention visible from their existing repos (e.g. `ns.s-` prefix for noshit-software)
+- Remind the user of any org naming convention visible from their existing repos (e.g. `ns.s-` prefix for noshit-software, `knightsrook-` prefix for robertgardunia)
 
 **Org**
 - Show a numbered menu from `SCAFFOLD_GITHUB_ORGS` (comma-separated)
@@ -32,15 +32,41 @@ Ask each question in sequence. Do not proceed until each is answered.
 - User can accept or enter a different subdomain
 - Type `none` to skip DNS creation
 
-**Layers** — present each as a numbered menu, user picks one per category:
+**Project type**
+```
+[1] Single app   — one frontend/backend/db, deployed as a unit
+[2] Multi-service — docker-compose with separate backend, dashboard, and db containers
+```
+
+---
+
+### If Single app — layer menus
+
+Present each as a numbered menu, user picks one per category:
 
 ```
 Frontend:  [1] React+Vite  [2] BabylonJS+Vite  [3] Three.js+Vite  [4] Next.js  [5] none
 Backend:   [1] Express     [2] FastAPI          [3] none
-Database:  [1] MySQL       [2] none
+Database:  [1] MySQL       [2] Postgres         [3] none
 Auth:      [1] Clerk       [2] Passport/JWT     [3] none
 Deploy:    [1] PM2         [2] Docker           [3] none
 ```
+
+---
+
+### If Multi-service — service menus
+
+```
+Backend:   [1] FastAPI (Python 3.12 + uv)  [2] Express (Node/TS)  [3] none
+Dashboard: [1] React+Vite (internal tool)  [2] none
+Database:  [1] Postgres (pgvector + AGE)   [2] MySQL               [3] none
+Auth:      [1] API Key (header/query)      [2] none
+Docs:      [1] docs/architecture/ stub     [2] none
+```
+
+Multi-service always uses Docker Compose for deploy. PM2 is not offered.
+
+---
 
 **Confirm**
 Show a summary of all selections and ask to proceed (y/n).
@@ -53,10 +79,11 @@ Based on backend layer, assign the next available port from the appropriate rang
 - Express → `SCAFFOLD_PORT_RANGE_EXPRESS`
 - FastAPI → `SCAFFOLD_PORT_RANGE_FASTAPI`
 - Next.js (no separate backend) → `SCAFFOLD_PORT_RANGE_NEXTJS`
-- Vite dev server → `SCAFFOLD_PORT_RANGE_VITE_DEV`
+- Vite dev server (single-app frontend only) → `SCAFFOLD_PORT_RANGE_VITE_DEV`
+- Multi-service dashboard → `SCAFFOLD_PORT_RANGE_VITE_DEV` (dashboard exposed port)
 - none → no port needed
 
-To pick the port: use the start of the range as the default. Tell the user which port was assigned and ask them to confirm it's free.
+Use the start of the range as the default. Tell the user which port was assigned and ask them to confirm it's free.
 
 ---
 
@@ -83,16 +110,17 @@ Create files based on selected layers. Enforce these conventions across all proj
 ### Universal files (always created)
 - `.env.example` — all env vars the project needs, blank values
 - `.gitignore` — appropriate for the stack
-- `README.md` — repo name, description, stack, `pnpm dev` quickstart
+- `README.md` — repo name, description, stack, quickstart
 
 ### Conventions to enforce in every project
-- Single start command: `pnpm dev` boots everything (use `concurrently` if multiple processes)
+- Single start command: `pnpm dev` (single-app) or `docker compose up --build` (multi-service) boots everything
 - Env validated on startup — fail fast with a clear message if required vars are missing
 - Standard API response shape for any backend: `{ success: bool, data: any, error?: string }`
-- Error handler registered as the last Express middleware
 - All secrets in `.env`, never hardcoded
 
 ---
+
+## Single-app layer specs
 
 ### Layer: React+Vite
 
@@ -151,6 +179,7 @@ package.json  (scripts: dev, build, start)
 - Use App Router
 - If Auth=Clerk: install `@clerk/nextjs`, wrap layout with `<ClerkProvider>`, add middleware
 - If DB=MySQL: add `src/lib/db.ts` with mysql2 pool + env validation
+- If DB=Postgres: add `src/lib/db.ts` with postgres pool + env validation
 
 ### Layer: Express
 
@@ -164,14 +193,14 @@ src/
     errorHandler.ts
     auth.ts        (stub — only if Auth layer selected)
   lib/
-    db.ts          (only if DB=MySQL)
+    db.ts          (only if DB selected)
 tsconfig.json
 package.json  (scripts: dev [tsx watch], build [tsc], start)
 ```
 - Middleware order: helmet → morgan → cors → json → routes → errorHandler
-- DB module exports a pool, validates `DB_HOST/DB_USER/DB_PASS/DB_NAME` on import
+- DB module exports a pool, validates DB env vars on import
 
-### Layer: FastAPI
+### Layer: FastAPI (single-app)
 
 ```
 app/
@@ -179,19 +208,26 @@ app/
   routes/
     __init__.py
   lib/
-    db.py         (only if DB=MySQL)
+    db.py         (only if DB selected)
 pyproject.toml  (uv managed)
 .python-version
 ```
 - Use `uv` as package manager
-- Startup on port from assigned port range (`uvicorn app.main:app --port {port}`)
+- Startup: `uvicorn app.main:app --port {port}`
 - If frontend layer also selected: root `package.json` with `concurrently` to run both
 
 ### Layer: MySQL
 
 - Add `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`, `DB_PORT` to `.env.example`
-- Add `src/lib/db.ts` (Express) or `app/lib/db.py` (FastAPI) with connection pool
+- Add `src/lib/db.ts` (Express) or `app/lib/db.py` (FastAPI) with connection pool + env validation
 - Add `schema.sql` at repo root with `CREATE DATABASE IF NOT EXISTS` + initial tables stub
+
+### Layer: Postgres (single-app)
+
+- Add `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASS`, `POSTGRES_DB` to `.env.example`
+- Add `src/lib/db.ts` (Express) or `app/lib/db.py` (FastAPI) with asyncpg pool + env validation
+- Add `schema.sql` at repo root with initial tables stub
+- Add `db/init/01-extensions.sql` enabling pgvector and AGE
 
 ### Layer: Clerk (Auth)
 
@@ -212,19 +248,19 @@ Generate `ecosystem.config.js` at repo root:
 module.exports = {
   apps: [{
     name: '{repo-name}',
-    script: '{SCAFFOLD_SERVER_APPS_DIR}/{repo-name}/dist/index.js',  // or app/main.py for FastAPI
+    script: '{SCAFFOLD_SERVER_APPS_DIR}/{repo-name}/dist/index.js',
     cwd: '{SCAFFOLD_SERVER_APPS_DIR}/{repo-name}',
     env: { NODE_ENV: 'production', PORT: {assigned-port} }
   }]
 }
 ```
 
-Also output an nginx server block snippet (don't write a file — print it so the user can paste it):
+Also print nginx server block snippet for the user to paste:
 
 ```nginx
 server {
     listen 80;
-    server_name {repo-name}.{SCAFFOLD_CF_DOMAIN};
+    server_name {subdomain};
 
     location / {
         proxy_pass http://localhost:{assigned-port};
@@ -237,15 +273,296 @@ server {
 }
 ```
 
-### Layer: Docker (Deploy)
+### Layer: Docker (single-app deploy)
 
 Generate `Dockerfile` and `docker-compose.yml` appropriate for the backend layer.
 
 ---
 
+## Multi-service layer specs
+
+Multi-service projects use this directory structure:
+
+```
+{repo-name}/
+├── backend/
+├── dashboard/         (if Dashboard selected)
+├── db/
+│   └── init/
+├── docs/
+│   └── architecture/  (if Docs selected)
+├── docker-compose.yml
+├── .env.example
+├── .gitignore
+└── README.md
+```
+
+### Multi-service: Backend = FastAPI
+
+Full production-ready FastAPI skeleton with structured logging, event bus, and dashboard stream:
+
+```
+backend/
+  app/
+    main.py             — FastAPI entry, lifespan, CORS, router registration
+    config.py           — Pydantic Settings, validates all env on startup, fails fast
+    db.py               — asyncpg pool; enables pgvector + sets AGE search_path on connect
+    logging.py          — structlog configuration (JSON in prod, console in dev)
+    events.py           — internal async pub-sub event bus
+    dashboard_stream.py — WebSocket endpoint at /ws/events; broadcasts events to dashboard
+    api/
+      __init__.py
+      health.py         — GET /health → { status, db, uptime }
+      topics.py         — basic CRUD stub
+    subsystems/
+      __init__.py       — empty; sovereign components live here
+  pyproject.toml        — uv project: fastapi, uvicorn, asyncpg, structlog, pydantic-settings, pytest-asyncio
+  .python-version       — 3.12
+  Dockerfile
+  ruff.toml             — ruff lint + format config
+```
+
+**`app/main.py`** — lifespan initializes DB pool and event bus; registers all routers; mounts dashboard stream WebSocket.
+
+**`app/config.py`** — uses `pydantic-settings`; all fields required with no defaults (missing vars crash at startup with a clear message).
+
+**`app/db.py`** — on pool creation, runs `CREATE EXTENSION IF NOT EXISTS vector` and `LOAD 'age'` + sets `search_path = ag_catalog, public`.
+
+**`app/events.py`** — asyncio-based pub-sub: `publish(event_type, payload)`, `subscribe(event_type)` returns an async generator. Subsystems emit observable events without coupling.
+
+**`app/dashboard_stream.py`** — WebSocket endpoint `/ws/events`; subscribes to all event types; pushes JSON to connected dashboard clients. Handles disconnect gracefully.
+
+**`backend/Dockerfile`**:
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+RUN pip install uv
+COPY pyproject.toml .
+RUN uv sync --no-dev
+COPY app/ ./app/
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### Multi-service: Backend = Express
+
+```
+backend/
+  src/
+    index.ts
+    app.ts
+    routes/
+      index.ts
+      health.ts
+    middleware/
+      errorHandler.ts
+      auth.ts            (if Auth=API Key)
+    lib/
+      db.ts              (if DB selected)
+  tsconfig.json
+  package.json
+  Dockerfile
+```
+
+### Multi-service: Dashboard = React+Vite (internal tool)
+
+Three-panel layout: event stream, state inspector, manual probe. Connects to backend via WebSocket.
+
+```
+dashboard/
+  src/
+    main.tsx
+    App.tsx
+    panels/
+      EventStream.tsx    — live WebSocket feed, auto-scrolling log
+      StateInspector.tsx — table view of current topics/memory state; polls /api/topics
+      ManualProbe.tsx    — form to trigger retrievals; displays result JSON
+    lib/
+      ws.ts              — useWebSocket hook; auto-reconnect with backoff
+      api.ts             — typed fetch wrappers for backend REST endpoints
+    components/
+      Panel.tsx          — shared panel chrome (title, collapse, resize handle)
+  vite.config.ts         — proxy /api and /ws to backend in dev
+  tsconfig.json
+  package.json           (scripts: dev, build, preview)
+  Dockerfile             — nginx:alpine serving built dist/
+```
+
+**`vite.config.ts`** — proxy `/api` → `http://backend:8000` and `/ws` → `ws://backend:8000` so dashboard dev server talks to the backend without CORS.
+
+**`dashboard/Dockerfile`**:
+```dockerfile
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+```
+
+**`dashboard/nginx.conf`** — serves static files, proxies `/api` and `/ws` to backend container.
+
+### Multi-service: Database = Postgres (pgvector + AGE)
+
+```
+db/
+  init/
+    01-extensions.sql   — installs pgvector and AGE
+    02-schema.sql       — base schema stub
+  Dockerfile            — pgvector:pg16 base + AGE compiled from source
+```
+
+**`db/Dockerfile`**:
+```dockerfile
+FROM pgvector/pgvector:pg16
+
+RUN apt-get update && apt-get install -y \
+    build-essential postgresql-server-dev-16 git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch PG16 https://github.com/apache/age.git /tmp/age \
+    && cd /tmp/age \
+    && make PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config \
+    && make install PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config \
+    && rm -rf /tmp/age
+```
+
+**`db/init/01-extensions.sql`**:
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+LOAD 'age';
+CREATE EXTENSION IF NOT EXISTS age;
+SET search_path = ag_catalog, "$user", public;
+```
+
+**`db/init/02-schema.sql`** — project-specific stub with a comment block explaining the schema.
+
+Postgres env vars added to `.env.example`:
+```
+POSTGRES_USER=
+POSTGRES_PASS=
+POSTGRES_DB=
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+```
+
+### Multi-service: Database = MySQL (in compose)
+
+Same as single-app MySQL but wired into docker-compose as a service using `mysql:8` image, with `db/init/01-schema.sql` mounted.
+
+### Multi-service: Auth = API Key
+
+- Add `API_KEY` to `.env.example`
+- Add `app/middleware/auth.py` (FastAPI) or `src/middleware/auth.ts` (Express): check `Authorization: Bearer <key>` header or `?api_key=<key>` query param; return 401 if invalid
+- Skip check when `API_KEY` is empty (dev convenience)
+
+### Multi-service: Docker Compose
+
+Generate `docker-compose.yml` wiring all selected services:
+
+```yaml
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "${BACKEND_PORT}:8000"
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [app-net]
+    restart: unless-stopped
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "${DASHBOARD_PORT}:80"
+    depends_on:
+      - backend
+    networks: [app-net]
+    restart: unless-stopped
+
+  db:
+    build: ./db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASS}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [app-net]
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+
+networks:
+  app-net:
+    driver: bridge
+```
+
+Omit services that weren't selected. If DB=MySQL, use `mysql:8` image instead and adjust healthcheck to `mysqladmin ping`.
+
+### Multi-service: Docs = docs/architecture/
+
+```
+docs/
+  architecture/
+    overview.md    — template with sections: Purpose, Services, Data Model, Key Flows, ADRs
+```
+
+**`docs/architecture/overview.md`** template:
+```markdown
+# {repo-name} — Architecture Overview
+
+## Purpose
+
+{one-paragraph description}
+
+## Services
+
+| Service | Tech | Port | Responsibility |
+|---------|------|------|----------------|
+| backend | FastAPI | 8000 | ... |
+| dashboard | React+Vite | {dashboard-port} | ... |
+| db | Postgres 16 | 5432 | ... |
+
+## Data Model
+
+_Describe key tables/graphs here._
+
+## Key Flows
+
+_Numbered sequence descriptions of the most important request paths._
+
+## Architecture Decision Records
+
+### ADR-001 — {title}
+**Status:** Accepted
+**Context:** ...
+**Decision:** ...
+**Consequences:** ...
+```
+
+This file is checked into the repo so CC has architecture context available when working inside the codebase without needing MCP lookup.
+
+---
+
 ## 6. Create Cloudflare DNS record
 
-Skip this step if the user typed `none` for subdomain.
+Skip this step if:
+- User typed `none` for subdomain, OR
+- `SCAFFOLD_CF_ZONE_ID_{org}` is empty in config (Cloudflare not yet configured for that org)
 
 Look up `SCAFFOLD_CF_ZONE_ID_{org}` and `SCAFFOLD_CF_DOMAIN_{org}` (hyphens in org → underscores).
 
@@ -280,17 +597,35 @@ git push origin main
 
 ## 8. Done — print summary
 
+### Single app
+
 ```
 ✓ Repo:      https://github.com/{org}/{repo-name}
 ✓ Local:     {workspace}/{repo-name}
-✓ DNS:       {repo-name}.{SCAFFOLD_CF_DOMAIN} → {SCAFFOLD_SERVER_HOST}
+✓ DNS:       {subdomain} → {SCAFFOLD_SERVER_HOST}   (or: skipped)
 ✓ Port:      {assigned-port}
 
 Next steps:
-  1. Copy .env.example → .env and fill in values
-  2. pnpm install
-  3. pnpm dev
-  4. On server: paste nginx config into {SCAFFOLD_SERVER_NGINX_SITES}/{repo-name}
-               then: sudo nginx -t && sudo systemctl reload nginx
-               then: pm2 start ecosystem.config.js && pm2 save
+  1. cp .env.example .env && fill in values
+  2. pnpm install && pnpm dev
+  3. On server: paste nginx config → {SCAFFOLD_SERVER_NGINX_SITES}/{repo-name}
+               sudo nginx -t && sudo systemctl reload nginx
+               pm2 start ecosystem.config.js && pm2 save
+```
+
+### Multi-service
+
+```
+✓ Repo:      https://github.com/{org}/{repo-name}
+✓ Local:     {workspace}/{repo-name}
+✓ DNS:       {subdomain} → {SCAFFOLD_SERVER_HOST}   (or: skipped)
+✓ Backend:   :{backend-port}
+✓ Dashboard: :{dashboard-port}
+
+Next steps:
+  1. cp .env.example .env && fill in values
+  2. docker compose up --build
+  3. Dashboard: http://localhost:{dashboard-port}
+  4. API:       http://localhost:{backend-port}/health
+  5. DB build note: first build compiles AGE from source — takes ~3 min
 ```
