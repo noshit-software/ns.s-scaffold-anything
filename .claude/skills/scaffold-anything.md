@@ -194,11 +194,18 @@ src/
     auth.ts        (stub — only if Auth layer selected)
   lib/
     db.ts          (only if DB selected)
+  __tests__/
+    health.test.ts — smoke test: GET /health returns 200
+scripts/
+  db-reset.ts    — stub (only if DB selected): drops runtime schema, recreates it
+  db-seed.ts     — stub (only if DB selected): inserts baseline rows
 tsconfig.json
-package.json  (scripts: dev [tsx watch], build [tsc], start)
+package.json  (scripts: dev [tsx watch], build [tsc], start, test [vitest run], test:watch [vitest], db:reset, db:seed)
 ```
 - Middleware order: helmet → morgan → cors → json → routes → errorHandler
 - DB module exports a pool, validates DB env vars on import
+- Test runner: vitest, default-on — `pnpm test` runs once, `pnpm test:watch` watches
+- `db:reset` and `db:seed` npm script slots are always generated when DB is selected; stubs print a TODO and exit 0
 
 ### Layer: FastAPI (single-app)
 
@@ -225,9 +232,66 @@ pyproject.toml  (uv managed)
 ### Layer: Postgres (single-app)
 
 - Add `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASS`, `POSTGRES_DB` to `.env.example`
-- Add `src/lib/db.ts` (Express) or `app/lib/db.py` (FastAPI) with asyncpg pool + env validation
-- Add `schema.sql` at repo root with initial tables stub
-- Add `db/init/01-extensions.sql` enabling pgvector and AGE
+- Add `src/lib/db.ts` (Express) with `pg` Pool + env validation + per-connection AGE bootstrap
+- Add `db/init/` with extension + graph init scripts
+- Add `db/Dockerfile` building pgvector + AGE in one image
+- Add `schema.sql` with substrate/runtime schema separation
+
+**`src/lib/db.ts`** — the `pool.on('connect')` hook is non-optional; without it every Cypher query fails with a cryptic error:
+
+```ts
+import pg from 'pg'
+
+const required = ['POSTGRES_HOST','POSTGRES_USER','POSTGRES_PASS','POSTGRES_DB','POSTGRES_PORT']
+for (const key of required) {
+  if (!process.env[key]) throw new Error(`Missing required env var: ${key}`)
+}
+
+export const pool = new pg.Pool({
+  host: process.env.POSTGRES_HOST,
+  user: process.env.POSTGRES_USER,
+  password: process.env.POSTGRES_PASS,
+  database: process.env.POSTGRES_DB,
+  port: Number(process.env.POSTGRES_PORT ?? 5432),
+})
+
+pool.on('connect', async (client) => {
+  await client.query(`LOAD 'age'`)
+  await client.query(`SET search_path = ag_catalog, "$user", public`)
+})
+```
+
+**`db/init/01-extensions.sql`** — runs at container init, installs both extensions and creates the default graph:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+LOAD 'age';
+CREATE EXTENSION IF NOT EXISTS age;
+SET search_path = ag_catalog, "$user", public;
+SELECT * FROM ag_catalog.create_graph('graph');
+```
+
+**`db/Dockerfile`** — stock postgres has neither extension; pgvector image has only one; this compiles AGE onto the pgvector base:
+
+```dockerfile
+FROM pgvector/pgvector:pg16
+
+RUN apt-get update && apt-get install -y \
+    build-essential postgresql-server-dev-16 git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch PG16 https://github.com/apache/age.git /tmp/age \
+    && cd /tmp/age \
+    && make PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config \
+    && make install PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config \
+    && rm -rf /tmp/age
+```
+
+**Schema convention** — `schema.sql` defines two schemas:
+- `substrate` — persistent reference data; survives `db:reset`
+- `runtime` — ephemeral working state; dropped and recreated by `db:reset`
+
+`db:reset` drops only `runtime`. `db:seed` repopulates it. The wipe boundary is structural (schema name), not encoded in application logic.
 
 ### Layer: Clerk (Auth)
 
@@ -431,15 +495,29 @@ RUN git clone --depth 1 --branch PG16 https://github.com/apache/age.git /tmp/age
     && rm -rf /tmp/age
 ```
 
-**`db/init/01-extensions.sql`**:
+**`db/init/01-extensions.sql`** — runs at container init, installs both extensions and creates the default graph:
+
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 LOAD 'age';
 CREATE EXTENSION IF NOT EXISTS age;
 SET search_path = ag_catalog, "$user", public;
+SELECT * FROM ag_catalog.create_graph('graph');
 ```
 
 **`db/init/02-schema.sql`** — project-specific stub with a comment block explaining the schema.
+
+**Per-connection AGE bootstrap** — every connection that touches AGE needs `LOAD 'age'` before Cypher works. For FastAPI/asyncpg, wire it via the `init` parameter:
+
+```python
+async def _init_conn(conn):
+    await conn.execute("LOAD 'age'")
+    await conn.execute("SET search_path = ag_catalog, \"$user\", public")
+
+pool = await asyncpg.create_pool(..., init=_init_conn)
+```
+
+For Express/pg, use `pool.on('connect')` — see single-app Postgres spec.
 
 Postgres env vars added to `.env.example`:
 ```
