@@ -1,1 +1,1 @@
-{}
+{"skill": "scaffold-anything.md", "env": ".env config", "readme": "README.md", "pkg": "package.json", "validate": "validator script", "CF": "Cloudflare", "AGE": "Apache AGE graph db", "db": "database/Postgres"}
